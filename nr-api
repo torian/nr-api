@@ -1,25 +1,23 @@
 #!/usr/bin/env python
+###############################################################################
+
 """Usage: 
-  nr-api server --to-policy POLICY [--id ID|--name NAME] [options]
-  nr-api server --list  [options]
-  nr-api server --clean [--id ID|--name NAME] [options]
-  nr-api policy --list [options]
-  nr-api label  --list [options]
+  nr-api <object> <command> --api-key <key> [options]
 
-Server Options:
+Server commands and options
 
-  --to-policy POLICY      Add the server to the named policy
-  --clean                 Clean servers that are not reporting. If the parameter
+  <commands>                            list, search, policy
+  --policy-name <policy>                Policy to add server to
 
-General options:
+Options:
 
-  -k APIKEY,--api-key APIKEY  NewRelic API Key
-  --list                      List servers currently monitored
-  -i ID,--id ID               Server id 
-  -n NAME,--name NAME         Server name
-  -j,--json                   Output json [default: False]
-  -l LOGLEVEL,--loglevel      LOGLEVEL    loglevel [default: error]
-  -h,--help                   Display help
+  -k <apikey>, --api-key <apikey>       NewRelic API Key
+  -i <id>, --id <id>                    Object id 
+  -n <name>, --name <name>              Object name / pattern
+
+  -j,--json                             Output json [default: true]
+  -l <loglevel>, --loglevel <loglevel>  loglevel [default: error]
+  -h,--help                             Display help
 
 """
 
@@ -35,17 +33,35 @@ from   docopt import  docopt
 import logging
 
 import newrelic_api.servers
-import newrelic_api.labels as nrl
+import newrelic_api.alert_policies
+import newrelic_api.labels
 
 ###############################################################################
 
-class NewRelicServers(object):
+class NewRelicClass(object):
 
-  def __init__(self, api_key, loglevel = logging.INFO):
-    self.nrs      = newrelic_api.servers.Servers(api_key = api_key)
+  def __init__(self, obj_type, api_key, loglevel = logging.INFO):
+
+    # Map class types
+    obj_cls = dict(
+      server       = newrelic_api.servers.Servers,
+      label        = newrelic_api.labels.Labels,
+      alert_policy = newrelic_api.alert_policies.AlertPolicies,
+    )
+
+    # Map to plural to retrieve list()[items]
+    obj_items = dict(
+      server       = 'servers',
+      label        = 'labels',
+      alert_policy = 'alert_policies',
+    )
+
     self.api_key  = api_key
-    self.servers  = self.nrs.list()['servers']
     self.loglevel = loglevel
+
+    cls        = obj_cls.get(obj_type)
+    self.cls   = cls(api_key = self.api_key)
+    self.items = self.cls.list()[obj_items.get(obj_type)]
 
     log_fmt     = '%(asctime)s %(levelname)s: %(message)s'
     log_datefmt = '%d/%b/%Y:%H:%M:%S'
@@ -54,23 +70,17 @@ class NewRelicServers(object):
 
   def list(self, fmt_json = False):
     """
-      Return a list of servers
+      Return a list of objects
     """
-    #r = map(
-    #  lambda s: { 'name': s['name'], 'host': s['name'], 'id': s['id'] }, 
-    #  self.servers
-    #)
-    r = self.servers
-
+    r = self.items
     if fmt_json:
-      return json.dumps(r)
-
+      return json.dumps(r, indent=4, separators=(',', ': '))
     return r
 
 
-  def search(self, pattern = None, field = None):
+  def search(self, field = None, pattern = None):
     """
-      Search for servers that match a pattern.
+      Search for objs that match a pattern.
       The field is defined by --id or --name parameters command line args
     """
     try:
@@ -78,11 +88,24 @@ class NewRelicServers(object):
         field   = 'name'
         pattern = '.*'
       
-      matches = filter(lambda s: re.search(str(pattern),str(s[field])) != None, self.servers)
+      matches = filter(lambda o: re.search(str(pattern),str(o[field])) != None, self.items)
+      if self.loglevel == logging.DEBUG:
+        logging.debug("Matched %i objects:" % len(matches))
+        for m in matches:
+          logging.debug("name[%s] id[%s]" % (m['name'], m['id']))
       return map(lambda m: m['id'], matches)
+
     except IndexError:
       return None
-    
+
+
+
+class NewRelicServers(NewRelicClass):
+
+  def __init__(self, api_key, loglevel = logging.INFO):
+    NewRelicClass.__init__(self, 'server', api_key, loglevel)
+    self.servers = self.items
+
 
   def server(self, id):
     """
@@ -101,60 +124,32 @@ class NewRelicServers(object):
     """
     try:
       s = filter(lambda server: server['id'] == id, self.servers)[0]
-      logging.info("Server to remove: %s [%s]" % (s['name'], s['host']))
       
-      if self.loglevel == logging.DEBUG:
-        logging.debug("Deleting server: %s" % s)
+      logging.debug("Server to remove: %s name[%s] id[%s]" % (s['host'], s['name'], s['id']))
       
       if s['reporting']:
         msg = "Reporting server %s[%s] cannot be deleted" % (s['host'], s['id'])
         logging.warning(msg)
         return False
       
-      self.nrs.delete(s['id'])
+      logging.info("Deleting server %s" % s)
+      self.cls.delete(s['id'])
         
     except IndexError: 
       logging.warning("Server ID %s does not exist" % id)
 
 
 
-class NewRelicAlertPolicies(object):
+class NewRelicAlertPolicies(NewRelicClass):
 
   def __init__(self, api_key, loglevel = logging.INFO):
-    self.api_key  = api_key
-    self.nrp      = newrelic_api.alert_policies.AlertPolicies(api_key = api_key)
-    self.policies = self.nrp.list()['alert_policies']
-
-    self.loglevel = loglevel
-
-    log_fmt     = '%(asctime)s %(levelname)s: %(message)s'
-    log_datefmt = '%d/%b/%Y:%H:%M:%S'
-    logging.basicConfig(format = log_fmt, datefmt = log_datefmt, level = loglevel)
-
-
-  def list(self, fmt_json = False):
-    r = self.policies
-    if fmt_json:
-      return json.dumps(r)
-
-    return r
-
-
-  def search(self, pattern = None, field = None):
-    """
-      Search for policies that match a pattern.
-      The field is defined by --id or --name parameters command line args
-    """
-    try:
-      matches = filter(lambda p: re.search(str(pattern),str(p[field])) != None, self.policies)
-      return map(lambda m: m['id'], matches)
-    except IndexError:
-      return None
+    NewRelicClass.__init__(self, 'alert_policy', api_key, loglevel)
+    self.alert_policies = self.items
 
 
   def policy(self, id):
     try:
-      return filter(lambda p: p['id'] == id, self.policies)[0]
+      return filter(lambda p: p['id'] == id, self.alert_policies)[0]
     except IndexError:
       return None
 
@@ -166,7 +161,10 @@ class NewRelicAlertPolicies(object):
       return None
 
 
-  def add_server(self, id, server_ids = None):
+  def add_servers(self, id, server_ids = None):
+    """
+      Add servers by id to a given alert policy
+    """
     if server_ids is None:
       return False
 
@@ -179,39 +177,8 @@ class NewRelicAlertPolicies(object):
     policy_update['links']['servers'] = server_list
 
     logging.info("Update policy %s with server ids %s" % (id, server_list))
-    self.nrp.update(id, { 'alert_policy': policy_update })
+    self.cls.update(id, { 'alert_policy': policy_update })
 
-
-
-class NewRelicLabels(object):
-
-  def __init__(self, api_key, loglevel = logging.INFO):
-    self.nrl     = newrelic_api.labels.Labels(api_key = api_key)
-    self.labels  = self.nrl.list()['labels']
-    self.api_key = api_key
-
-    self.loglevel = loglevel
-
-    log_fmt     = '%(asctime)s %(levelname)s: %(message)s'
-    log_datefmt = '%d/%b/%Y:%H:%M:%S'
-    logging.basicConfig(format = log_fmt, datefmt = log_datefmt, level = loglevel)
-
-
-  def list(self, fmt_json = False):
-    #return map(lambda l: { 'category': l['category'], 'name': l['name'] }, self.labels)
-    r = self.labels
-
-    if fmt_json:
-      return json.dumps(r)
-
-    return r
-
-
-  def label_name(self, id):
-    try:
-      return filter(lambda s: s['id'] == id, self.labels)[0]
-    except IndexError:
-      return None
 
 ###############################################################################
 
@@ -240,10 +207,6 @@ for o in opts:
 if options['loglevel'] == 'debug':
   pprint(options)
 
-servers  = NewRelicServers(options['api-key'], loglevel = cfg['loglevel'][options['loglevel']])
-labels   = NewRelicLabels(options['api-key'], loglevel = cfg['loglevel'][options['loglevel']])
-policies = NewRelicAlertPolicies(options['api-key'], loglevel = cfg['loglevel'][options['loglevel']])
-
 field   = None
 pattern = None
 
@@ -255,40 +218,46 @@ elif options['name']:
   field   = 'name'
   pattern = options['name']
 
-elif options['label']: 
-  field   = 'label'
-  pattern = options['label']
+nr_cls_dict = dict(
+  server       = NewRelicServers,
+  alert_policy = NewRelicAlertPolicies,
+)
 
+nr_cls  = nr_cls_dict.get(options['<object>'])
+nr_inst = nr_cls(options['api-key'], loglevel = cfg['loglevel'][options['loglevel']])
 
-
-# Actions for server
-if options['server']:
-  
-  if options['list']:
-    print servers.list(options['json'])
+if options['<command>'] == 'list':
+  print nr_inst.list(options['json'])
    
-  elif options['to-policy']:
-    # Make sure servers exists
-    srv    = servers.search(pattern, field)
-    policy = policies.search(options['to-policy'], 'name')
-
-    if len(policy) > 1:
-      logging.error("Policy name %s matches more than one policy" % options['to-policy'])
-      
-    policies.add_server(policy[0], srv)
-
-  elif options['clean']:
-    srv = servers.search(pattern, field)
-    for s in srv:
-      servers.delete(s)
+elif options['<command>'] == 'search':
+  print nr_inst.search(field, pattern)
  
-elif options['label']:
-
-    if options['list']:
-      print servers.list(options['json'])
-
-elif options['policy']:
-
-    if options['list']:
-      print policies.list(options['json'])
+ # Clean no longer reporting servers
+elif options['<command>'] == 'clean':
+  items = nr_inst.search(field, pattern)
+  for id in items:
+    nr_inst.delete(id)
  
+ # Add one or a set of servers to an alert policy
+elif options['<command>'] == 'policy':
+  policy_inst = nr_cls_dict.get('alert_policy')(
+    options['api-key'], 
+    loglevel = cfg['loglevel'][options['loglevel']]
+  )
+  policy = policy_inst.search('name', options['policy-name'])
+
+  if len(policy) > 1:
+    logging.error("Policy name %s matches more than one policy" % options['alert-policy'])
+    sys.exit(10)
+    
+  # List of servers that match the search
+  servers = nr_inst.search(field, pattern)
+ 
+  if len(servers) < 1:
+    logging.error("Pattern %s for field %s did not match any server" % 
+      (pattern, field)
+    )
+    sys.exit(11)
+    
+  policy_inst.add_servers(policy[0], servers)
+
