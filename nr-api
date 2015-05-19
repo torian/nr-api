@@ -16,7 +16,7 @@ Options:
   -n <name>, --name <name>              Object name / pattern
 
   -j,--json                             Output json [default: true]
-  -l <loglevel>, --loglevel <loglevel>  loglevel [default: error]
+  -l <loglevel>, --loglevel <loglevel>  loglevel [default: info]
   -h,--help                             Display help
 
 """
@@ -128,7 +128,7 @@ class NewRelicServers(NewRelicClass):
       logging.debug("Server to remove: %s name[%s] id[%s]" % (s['host'], s['name'], s['id']))
       
       if s['reporting']:
-        msg = "Reporting server %s[%s] cannot be deleted" % (s['host'], s['id'])
+        msg = "Server %s[%s] is reporting and cannot be deleted" % (s['host'], s['id'])
         logging.warning(msg)
         return False
       
